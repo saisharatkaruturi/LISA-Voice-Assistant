@@ -1,0 +1,9 @@
+{
+  "name": "LISA",
+  "credit": "Built by Sharat",
+  "port": 7420,
+  "bus": "../backtalk",
+  "sound": true,
+  "gestures": true,
+  "talk_key": "home"
+}

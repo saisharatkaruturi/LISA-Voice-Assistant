@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<!--
+LISA Core: the face of LISA.
+Copyright (C) 2026 Sharat. All rights reserved.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LISA</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;background:#03050a;overflow:hidden;cursor:none}
+  canvas#stage{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script src="engine.js"></script>
+<script>
+"use strict";
+/* ============================================================
+   LISA CORE  ·  the living neural sphere
+   ~700 neurons on a sphere that morphs like tissue, wired to
+   their neighbours, with long axons arcing through the middle.
+   Synapse sparks fire across the wiring and chain from neuron
+   to neuron. Inside: a plasma core wrapped in gyroscope energy
+   ribbons, throwing lightning at the shell. Outside: orbit rings
+   with satellites, a holographic text ring, side readouts, an
+   aurora sky with shooting stars, drifting dust and a floor.
+
+   boot       neurons fly in from deep space and lock into place
+   idle       cyan, slow breathing, a few stray sparks
+   listening  green, waves pull INTO the sphere
+   thinking   violet, synapse storms, lightning, scanner arcs
+   speaking   the sphere ripples with her voice, a spectrum ring
+              pulses around it, shockwaves on every syllable
+   alert      red
+   Mouse: the sphere leans toward the cursor; click to fire it up.
+   ============================================================ */
+
+const fx_=Lisa.fx;
+const cv=document.getElementById("stage"), ctx=cv.getContext("2d");
+const field=document.createElement("canvas"), fx=field.getContext("2d");
+let W=0,H=0;
+const FONT="Consolas,'SF Mono',Menlo,monospace";
+const CAM=6;                         // resting camera distance, in sphere radii
+const NEAR=.12;                      // anything closer to the camera than this is behind it
+let camD=CAM,camDT=CAM;              // live camera distance: zoom flies it in, even inside the sphere
+const BOOT=2.6;                      // seconds the boot sequence takes
+
+/* seeded xorshift so screenshots repeat exactly */
+const rng=(()=>{let x=0x9E3779B9;return()=>{x^=x<<13;x^=x>>>17;x^=x<<5;return(x>>>0)/4294967296}})();
+const cl=a=>Math.max(0,Math.min(1,a));
+const easeOut=k=>1-Math.pow(1-cl(k),3);
+
+/* ---------------- palette, eased per mode ---------------- */
+const PAL={idle:[64,190,255],listening:[70,255,190],
+           thinking:[176,112,255],speaking:[110,225,255]};
+const ALERT=[255,60,60];
+const col=[64,190,255];
+function easeCol(dt){
+  const tg=Lisa.alert?ALERT:(PAL[Lisa.mode]||PAL.idle);
+  const k=Math.min(1,dt/400);
+  for(let i=0;i<3;i++)col[i]+=(tg[i]-col[i])*k;
+}
+const C=a=>`rgba(${col[0]|0},${col[1]|0},${col[2]|0},${cl(a)})`;
+const Cw=(w,a)=>`rgba(${col[0]+(255-col[0])*w|0},${col[1]+(255-col[1])*w|0},`+
+                `${col[2]+(255-col[2])*w|0},${cl(a)})`;
+
+/* glow sprites: white is fixed, the tinted one follows the palette */
+const glowW=fx_.glow([255,255,255],64);
+let glowC=null,glowKey="";
+function refreshGlow(){
+  const key=(col[0]>>3)+","+(col[1]>>3)+","+(col[2]>>3);
+  if(key!==glowKey){glowKey=key;glowC=fx_.glow([col[0]|0,col[1]|0,col[2]|0],128)}
+}
+
+/* ---------------- the neurons ---------------- */
+const N=720;
+const base=new Float32Array(N*3);
+const scat=new Float32Array(N), dly=new Float32Array(N);   // boot fly-in
+for(let i=0;i<N;i++){
+  const y=1-(i+.5)/N*2, r=Math.sqrt(1-y*y), th=i*2.39996323;
+  const x=Math.cos(th)*r+(rng()-.5)*.05, yy=y+(rng()-.5)*.05, z=Math.sin(th)*r+(rng()-.5)*.05;
+  const l=Math.hypot(x,yy,z);
+  base[i*3]=x/l;base[i*3+1]=yy/l;base[i*3+2]=z/l;
+  scat[i]=1.5+rng()*3;dly[i]=rng()*.6;
+}
+/* wiring: each neuron to its 3 nearest, plus long axons through the core */
+const E0=[],E1=[],EA=[];
+const adj=Array.from({length:N},()=>[]);
+{
+  const seen=new Set();
+  const link=(i,j,ax)=>{
+    const key=i<j?i*N+j:j*N+i;
+    if(i===j||seen.has(key))return;
+    seen.add(key);
+    const e=E0.length;E0.push(i);E1.push(j);EA.push(ax);
+    adj[i].push(e);adj[j].push(e);
+  };
+  for(let i=0;i<N;i++){
+    const best=[];
+    for(let j=0;j<N;j++){
+      if(j===i)continue;
+      const dx=base[i*3]-base[j*3],dy=base[i*3+1]-base[j*3+1],dz=base[i*3+2]-base[j*3+2];
+      const d=dx*dx+dy*dy+dz*dz;
+      if(best.length<3||d<best[best.length-1][0]){
+        best.push([d,j]);best.sort((a,b)=>a[0]-b[0]);
+        if(best.length>3)best.pop();
+      }
+    }
+    for(const[,j]of best)link(i,j,0);
+  }
+  for(let k=0;k<48;k++)link(rng()*N|0,rng()*N|0,1);
+}
+const NE=E0.length;
+const SX=new Float32Array(N),SY=new Float32Array(N),SD=new Float32Array(N);
+const SS=new Float32Array(N), SV=new Uint8Array(N);   // perspective scale, visible (in front of camera)
+const flash=new Float32Array(N);
+
+/* tissue-like morph: a few crossed sines, cheap and smooth */
+function noise(x,y,z,t){
+  return Math.sin(x*3.1+t*.9)*Math.sin(y*2.7-t*.7)*Math.sin(z*3.3+t*.53)
+    +.5*Math.sin(x*5.3-y*4.1+t*1.3)*Math.sin(z*4.7+t*.8);
+}
+
+/* ---------------- camera ---------------- */
+let cx=0,cy=0,R=1,cyw=1,syw=0,cp=1,sp=0;
+let PX=0,PY=0,PD=0,PS=1,PV=true,PF=1;  // last projection: x, y, depth 0..1, scale, visible, near-fade
+function proj(x,y,z){
+  const x1=x*cyw+z*syw, z1=-x*syw+z*cyw;
+  const y2=y*cp-z1*sp, z2=y*sp+z1*cp;
+  const dz=camD-z2;
+  if(dz<NEAR){PV=false;PX=cx;PY=cy;PD=0;PS=0;PF=0;return}
+  const sc=CAM/dz;
+  PV=true;PS=sc;PX=cx+x1*R*sc;PY=cy+y2*R*sc;PD=cl((z2+1.3)/2.6);
+  PF=cl((dz-NEAR)/.35);              // things right at the lens fade instead of flaring
+}
+
+/* ---------------- synapse pulses ---------------- */
+const pulses=[];
+const MAXP=420;
+const RATE={idle:5,listening:12,thinking:60,speaking:14};
+const CHAIN={idle:.35,listening:.5,thinking:.84,speaking:.55};
+const MAXGEN={idle:5,listening:6,thinking:12,speaking:7};
+let spawnAcc=0,rateS=5,fired=0;
+function spawnPulse(e,from,gen){
+  if(pulses.length>=MAXP)return;
+  pulses.push({e,from,to:E0[e]===from?E1[e]:E0[e],p:0,gen,
+    spd:EA[e]?.7+rng()*.4:1.8+rng()*1.6});
+}
+function burst(n){
+  for(let k=0;k<n;k++){const e=rng()*NE|0;spawnPulse(e,E0[e],0)}
+}
+/* point along an edge: axons bow through the middle, the rest are straight */
+function edgePt(e,from,to,t){
+  const x0=SX[from],y0=SY[from],x1=SX[to],y1=SY[to];
+  let qx=(x0+x1)/2,qy=(y0+y1)/2;
+  if(EA[e]){qx=cx+(qx-cx)*.3;qy=cy+(qy-cy)*.3}
+  const u=1-t;
+  PX=u*u*x0+2*u*t*qx+t*t*x1;PY=u*u*y0+2*u*t*qy+t*t*y1;
+  PD=SD[from]*u+SD[to]*t;
+}
+
+/* ---------------- inner core ---------------- */
+const RIB=[{rx:.3,ry:0,sp:.9,r:.40},{rx:1.2,ry:.8,sp:-1.3,r:.47},{rx:2.1,ry:1.7,sp:.7,r:.35}];
+const mote=[];
+for(let i=0;i<130;i++){
+  let ux=rng()-.5,uy=rng()-.5,uz=rng()-.5;let l=Math.hypot(ux,uy,uz);ux/=l;uy/=l;uz/=l;
+  const wx=rng()-.5,wy=rng()-.5,wz=rng()-.5;
+  let vx=uy*wz-uz*wy,vy=uz*wx-ux*wz,vz=ux*wy-uy*wx;l=Math.hypot(vx,vy,vz)||1;
+  mote.push({ux,uy,uz,vx:vx/l,vy:vy/l,vz:vz/l,r:.3+rng()*.5,ph:rng()*6.2832,w:.4+rng()*.9});
+}
+
+/* ---------------- lightning from the core ---------------- */
+const bolts=[];
+let boltAcc=0;
+function drawBolts(s,px){
+  for(let i=bolts.length-1;i>=0;i--){
+    const b=bolts[i];
+    b.life-=s*slow;
+    if(b.life<=0||!SV[b.to]){bolts.splice(i,1);continue}
+    const x1=SX[b.to],y1=SY[b.to];
+    const dx=x1-cx,dy=y1-cy,len=Math.hypot(dx,dy)||1,nx=-dy/len,ny=dx/len;
+    const a=b.life/b.max;
+    for(const[w,al]of[[3.2,.25],[1.2,.9]]){
+      fx.beginPath();fx.moveTo(cx,cy);
+      for(let k=1;k<10;k++){
+        const t=k/10,j=(rng()-.5)*len*.16*Math.sin(Math.PI*t);
+        fx.lineTo(cx+dx*t+nx*j,cy+dy*t+ny*j);
+      }
+      fx.lineTo(x1,y1);
+      fx.strokeStyle=Cw(.75,al*a);fx.lineWidth=Math.max(1,px*w);fx.stroke();
+    }
+    flash[b.to]=Math.max(flash[b.to],a);
+  }
+}
+
+/* ---------------- orbit rings ---------------- */
+const RINGS=[{r:1.36,rx:.22,rz:-.18,spd:.25,dash:false,sats:2},
+             {r:1.52,rx:-.35,rz:.30,spd:-.17,dash:true,sats:1},
+             {r:1.70,rx:.08,rz:.50,spd:.12,dash:false,sats:1}];
+function ringPt(g,a,rr,rot){
+  const x=Math.cos(a+rot)*rr,z=Math.sin(a+rot)*rr;
+  const c1=Math.cos(g.rx),s1=Math.sin(g.rx);
+  const y1=-z*s1,z1=z*c1;
+  const c2=Math.cos(g.rz),s2=Math.sin(g.rz);
+  proj(x*c2-y1*s2,x*s2+y1*c2,z1);
+}
+
+/* ---------------- holographic HUD rings (flat, screen space) ---------------- */
+const RING_TEXT="L.I.S.A.  ·  NEURAL CORE  ·  BUILT BY SHARAT  ·  ONLINE  ·  ";
+function drawHoloRings(T,px,a){
+  if(a<=.01)return;
+  const RR=R*sc0;                      // rings follow the zoom
+  // segmented arcs hugging the sphere
+  fx.lineWidth=Math.max(1,px*1.6);
+  for(let k=0;k<3;k++){
+    const st=T*.35+k*2.094;
+    fx.strokeStyle=C(.28*a);
+    fx.beginPath();fx.arc(cx,cy,RR*1.24,st,st+1.1);fx.stroke();
+  }
+  // tick ring, turning the other way
+  const tr=RR*1.83, rot=-T*.06;
+  fx.lineWidth=1;fx.strokeStyle=C(.2*a);fx.beginPath();
+  for(let i=0;i<120;i++){
+    const ang=rot+i/120*6.2832, L=i%10?4*px:11*px;
+    fx.moveTo(cx+Math.cos(ang)*tr,cy+Math.sin(ang)*tr);
+    fx.lineTo(cx+Math.cos(ang)*(tr+L),cy+Math.sin(ang)*(tr+L));
+  }
+  fx.stroke();
+  // the text ring
+  const fs=Math.max(9,Math.round(RR*.055));
+  fx.font=`${fs}px ${FONT}`;fx.textAlign="center";fx.textBaseline="middle";
+  fx.fillStyle=C(.38*a);
+  const txt=RING_TEXT.repeat(4), tR=RR*1.97, step=fs*.95/tR;
+  const start=T*.05;
+  for(let i=0;i<txt.length;i++){
+    const ang=start+i*step;
+    if(ang-start>6.2832-step)break;
+    fx.save();fx.translate(cx+Math.cos(ang)*tR,cy+Math.sin(ang)*tR);
+    fx.rotate(ang+Math.PI/2);fx.fillText(txt[i],0,0);fx.restore();
+  }
+}
+
+/* ---------------- her voice: bands, halo, wave line ----------------
+   The voice line only sends ~15 tiny snapshots a second, so drawing them
+   raw jitters. Instead: three frequency bands (low / mid / high) are read
+   from each snapshot, eased with a fast attack and a slow release, and the
+   visuals are smooth curves shaped by those bands and her loudness. */
+const band=[0,0,0], bandT=[0,0,0], bandMax=[1e-3,1e-3,1e-3];
+let lastRaw=null;
+function readBands(){
+  const raw=Lisa.raw;
+  if(raw&&raw!==lastRaw){
+    lastRaw=raw;
+    const n=raw.length, mags=new Float32Array(n>>1);
+    for(let k=1;k<=mags.length;k++){
+      let re=0,im=0;
+      for(let i=0;i<n;i++){const a=6.2832*k*i/n;re+=raw[i]*Math.cos(a);im-=raw[i]*Math.sin(a)}
+      mags[k-1]=Math.hypot(re,im);
+    }
+    const avg=(a,b)=>{let m=0;for(let k=a;k<b;k++)m+=mags[k];return m/(b-a)};
+    const vals=[avg(0,4),avg(4,12),avg(12,mags.length)];
+    for(let i=0;i<3;i++){
+      bandMax[i]=Math.max(vals[i],bandMax[i]*.995,1e-3);
+      bandT[i]=Math.min(1,vals[i]/bandMax[i]);
+    }
+  }
+  if(Lisa.mode!=="speaking")bandT.fill(0);
+}
+function easeBands(s){
+  for(let i=0;i<3;i++)
+    band[i]+=(bandT[i]-band[i])*(1-Math.exp(-s/(bandT[i]>band[i]?.07:.28)));
+}
+/* three closed, smoothly breathing rings around the sphere */
+const HALO=[{k:3,w:4,amp:.17,b:0,al:.85,wl:.3},{k:5,w:-6,amp:.12,b:1,al:.6,wl:.45},
+            {k:8,w:9,amp:.08,b:2,al:.45,wl:.6}];
+function drawVoiceHalo(px,env,T){
+  if(env<.01||outK<.02)return;
+  const r0=R*1.3*sc0;
+  for(const L of HALO){
+    const amp=L.amp*env*(.5+.5*band[L.b]);
+    fx.beginPath();
+    for(let j=0;j<=180;j++){
+      const th=j/180*6.2832;
+      const rr=r0*(1+amp*(.6+.4*Math.sin(th*L.k+T*L.w))*(.75+.25*Math.sin(th*2-T*1.3)));
+      const x=cx+Math.cos(th)*rr,y=cy+Math.sin(th)*rr;
+      j?fx.lineTo(x,y):fx.moveTo(x,y);
+    }
+    fx.closePath();
+    fx.strokeStyle=Cw(L.wl,L.al*Math.min(1,env*1.6)*outK);
+    fx.lineWidth=Math.max(1.2,px*1.8);fx.stroke();
+  }
+}
+/* the voice line under the mode: layered sine ribbons, tapered at both ends */
+const RIBBONS=[{f:2,sp:5.5,a:1,b:0,wl:.25,al:.9},{f:3.2,sp:-7,a:.7,b:1,wl:.45,al:.65},
+               {f:4.6,sp:9.5,a:.45,b:2,wl:.65,al:.5}];
+function drawVoiceLine(px,env,T){
+  const ww=Math.min(W*.42,640),x0=W/2-ww/2,y0=H-46,n=140;
+  for(let l=0;l<RIBBONS.length;l++){
+    const L=RIBBONS[l];
+    const amp=1.2+26*env*(.45+.55*band[L.b])*L.a;
+    const ys=new Float32Array(n+1);
+    fx.beginPath();
+    for(let i=0;i<=n;i++){
+      const x=i/n, win=Math.pow(Math.sin(Math.PI*x),2);
+      ys[i]=y0+Math.sin(6.2832*L.f*x+T*L.sp)*amp*win;
+      i?fx.lineTo(x0+ww*x,ys[i]):fx.moveTo(x0+ww*x,ys[i]);
+    }
+    fx.strokeStyle=Cw(L.wl,L.al*(.45+.55*Math.min(1,env*2+.2)));
+    fx.lineWidth=Math.max(1.2,px*1.6);fx.stroke();
+    if(l===0&&env>.02){                       // soft fill under the main ribbon
+      fx.lineTo(x0+ww,y0);fx.lineTo(x0,y0);fx.closePath();
+      fx.fillStyle=C(.10*env);fx.fill();
+    }
+  }
+}
+
+/* ---------------- background ---------------- */
+let bg=null,scan=null;
+const aur=[[20,140,170],[50,60,170],[110,50,170],[20,110,140]].map(c=>fx_.glow(c,256));
+const dust=[];
+function buildBg(){
+  bg=document.createElement("canvas");bg.width=W;bg.height=H;
+  const g=bg.getContext("2d");
+  const grd=g.createRadialGradient(W/2,H*.45,0,W/2,H*.45,Math.max(W,H)*.75);
+  grd.addColorStop(0,"#0b1628");grd.addColorStop(.55,"#060b16");grd.addColorStop(1,"#020308");
+  g.fillStyle=grd;g.fillRect(0,0,W,H);
+  dust.length=0;
+  for(let i=0;i<170;i++)dust.push({x:rng()*W,y:rng()*H,z:.25+rng()*.75,
+    tp:rng()*6.2832,ts:.5+rng()*1.5});
+  // hologram scanlines, drawn once
+  scan=document.createElement("canvas");scan.width=W;scan.height=H;
+  const s=scan.getContext("2d");
+  s.fillStyle="rgba(0,0,0,.16)";
+  for(let y=0;y<H;y+=3)s.fillRect(0,y,W,1);
+  const vg=s.createRadialGradient(W/2,H/2,Math.min(W,H)*.35,W/2,H/2,Math.max(W,H)*.75);
+  vg.addColorStop(0,"rgba(0,0,0,0)");vg.addColorStop(1,"rgba(0,0,0,.55)");
+  s.fillStyle=vg;s.fillRect(0,0,W,H);
+}
+let floorOff=0;
+function drawFloor(s){
+  floorOff=(floorOff+s*.35)%1;
+  const hz=H*.80;
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  for(let k=-16;k<=16;k++){ctx.moveTo(cx+k*W*.012,hz);ctx.lineTo(cx+k*W*.11,H)}
+  ctx.strokeStyle=C(.06);ctx.stroke();
+  for(let i=0;i<12;i++){
+    const z=(i+floorOff)/12, y=hz+(H-hz)*z*z;
+    ctx.strokeStyle=C(.10*z);
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+  }
+  const glow=ctx.createLinearGradient(0,hz-40,0,hz+40);
+  glow.addColorStop(0,C(0));glow.addColorStop(.5,C(.07));glow.addColorStop(1,C(0));
+  ctx.fillStyle=glow;ctx.fillRect(0,hz-40,W,80);
+}
+function drawAurora(T){
+  ctx.globalCompositeOperation="lighter";
+  const S=Math.max(W,H)*.95;
+  for(let i=0;i<aur.length;i++){
+    const x=W/2+Math.sin(T*.045*(i+1)+i*1.7)*W*.36;
+    const y=H*.42+Math.cos(T*.037*(i+1.5)+i*2.3)*H*.28;
+    ctx.globalAlpha=.16;
+    ctx.drawImage(aur[i],x-S/2,y-S/2,S,S);
+  }
+  ctx.globalAlpha=.10;
+  ctx.drawImage(glowC,cx-S*.4,cy-S*.4,S*.8,S*.8);
+  ctx.globalAlpha=1;
+  ctx.globalCompositeOperation="source-over";
+}
+function drawDust(s,T){
+  for(const d of dust){
+    d.y-=(4+10*d.z)*s;d.x+=Math.sin(T*.2+d.tp)*2*d.z*s;
+    if(d.y<-4){d.y=H+4;d.x=rng()*W}
+    const a=(.25+.35*Math.sin(T*d.ts+d.tp))*d.z;
+    if(a<=0)continue;
+    ctx.fillStyle=`rgba(190,225,255,${a})`;
+    const sz=d.z>.8?2:1;
+    ctx.fillRect(d.x,d.y,sz,sz);
+  }
+}
+/* shooting stars, every few seconds */
+const stars=[];let starCool=3;
+function drawStars(s){
+  starCool-=s;
+  if(starCool<=0){
+    starCool=3+rng()*6;
+    const fromLeft=rng()<.5;
+    stars.push({x:fromLeft?rng()*W*.4:W*(.6+rng()*.4),y:rng()*H*.35,
+      vx:(fromLeft?1:-1)*(500+rng()*400),vy:120+rng()*160,life:1.1});
+  }
+  ctx.globalCompositeOperation="lighter";
+  for(let i=stars.length-1;i>=0;i--){
+    const st=stars[i];
+    st.life-=s;st.x+=st.vx*s;st.y+=st.vy*s;
+    if(st.life<=0){stars.splice(i,1);continue}
+    const a=Math.min(1,st.life*1.5)*.8, tl=.09;
+    const g=ctx.createLinearGradient(st.x,st.y,st.x-st.vx*tl,st.y-st.vy*tl);
+    g.addColorStop(0,`rgba(220,240,255,${a})`);g.addColorStop(1,"rgba(220,240,255,0)");
+    ctx.strokeStyle=g;ctx.lineWidth=1.6;
+    ctx.beginPath();ctx.moveTo(st.x,st.y);ctx.lineTo(st.x-st.vx*tl,st.y-st.vy*tl);ctx.stroke();
+  }
+  ctx.globalCompositeOperation="source-over";
+}
+
+/* ---------------- waves, click ripples, scanner ---------------- */
+const waves=[], ripples=[];
+let envPrev=0,waveCool=0,listenCool=0,scanA=0;
+
+/* ---------------- control: mouse, touch and hands all drive this ----------------
+   lean     the sphere turns to look toward a point
+   rotate   drag-spin, with momentum when let go
+   zoom     pinch (two fingers, or two pinching hands)
+   tap      fires the neurons under a point
+   talk     holds LISA's talk key (long touch on the core, or a fist) */
+let mxT=0,myT=0,mx=0,my=0;
+const ctl={yawOff:0,pitchOff:0,vYaw:0,vPitch:0,held:false,talking:false};
+const DIVE=.55;                       // where a dive parks the camera: inside, just off the core
+function dive(){camDT=camDT>2?DIVE:CAM}
+function tapAt(x,y){
+  ripples.push({x,y,r:0,a:.9});
+  let hit=0;
+  for(let i=0;i<N;i++){
+    if(SV[i]&&Math.hypot(SX[i]-x,SY[i]-y)<R*.18){
+      flash[i]=1;hit++;
+      for(const e of adj[i])spawnPulse(e,i,0);
+    }
+  }
+  if(!hit)burst(40);
+}
+function touchNear(x,y){              // a fingertip in the air lights what it passes over
+  for(let i=0;i<N;i++)
+    if(SV[i]&&SD[i]>.45&&Math.hypot(SX[i]-x,SY[i]-y)<R*.08)flash[i]=Math.max(flash[i],.8);
+}
+let talkBeat=null;
+function setTalk(on){
+  if(on===ctl.talking||Lisa.demo)return;
+  ctl.talking=on;
+  const send=hold=>fetch("/talk",{method:"POST",headers:{"X-Lisa-Face":"1",
+    "Content-Type":"application/json"},body:JSON.stringify({hold})}).catch(()=>{});
+  clearInterval(talkBeat);
+  send(on);
+  if(on)talkBeat=setInterval(()=>send(true),300);   // heartbeat: the server lets go if these stop
+}
+window.LisaControl={
+  lean(nx,ny){mxT=nx;myT=ny},
+  rotate(dx,dy){ctl.yawOff+=dx;ctl.pitchOff=Math.max(-.9,Math.min(.9,ctl.pitchOff+dy))},
+  fling(vx,vy){ctl.vYaw=vx;ctl.vPitch=vy},
+  hold(on){ctl.held=on;if(on){ctl.vYaw=0;ctl.vPitch=0}},
+  // zooming moves the camera itself: far out, up to the shell, through it, into the core
+  zoomBy(f){camDT=Math.max(.32,Math.min(10,camDT/f))},
+  dive, tap:tapAt, touch:touchNear, talk:setTalk,
+  get core(){return{x:cx,y:cy,r:R}},
+};
+window.LisaClock=()=>T;               // the face's clock, for timing on-screen hints
+
+/* pointer input: one handler for mouse, pen and the touchscreen */
+const ptrs=new Map();
+let pinchD=0,pressT=null,lastMove=null,lastTap=null;
+cv.addEventListener("wheel",e=>{e.preventDefault();LisaControl.zoomBy(Math.exp(-e.deltaY*.0015))},{passive:false});
+addEventListener("keydown",e=>{
+  const k=e.key.toLowerCase();
+  if(k==="z")dive();
+  if(k==="+"||k==="=")LisaControl.zoomBy(1.25);
+  if(k==="-"||k==="_")LisaControl.zoomBy(.8);
+});
+cv.addEventListener("pointerdown",e=>{
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY,x0:e.clientX,y0:e.clientY,t0:performance.now(),moved:false});
+  LisaControl.hold(true);
+  if(ptrs.size===2){const[a,b]=[...ptrs.values()];pinchD=Math.hypot(a.x-b.x,a.y-b.y)}
+  clearTimeout(pressT);
+  if(ptrs.size===1&&camD>2.5&&Math.hypot(e.clientX-cx,e.clientY-cy)<R*1.1){
+    // press and hold on the core = push to talk
+    pressT=setTimeout(()=>{const p=ptrs.get(e.pointerId);if(p&&!p.moved)setTalk(true)},450);
+  }
+});
+cv.addEventListener("pointermove",e=>{
+  if(e.pointerType==="mouse")LisaControl.lean(e.clientX/W*2-1,e.clientY/H*2-1);
+  const p=ptrs.get(e.pointerId);
+  if(!p)return;
+  const dx=e.clientX-p.x,dy=e.clientY-p.y;
+  p.x=e.clientX;p.y=e.clientY;
+  if(Math.hypot(p.x-p.x0,p.y-p.y0)>10)p.moved=true;
+  if(ptrs.size===2){
+    const[a,b]=[...ptrs.values()],d=Math.hypot(a.x-b.x,a.y-b.y);
+    if(pinchD>0)LisaControl.zoomBy(d/pinchD);
+    pinchD=d;
+  }else if(!ctl.talking){
+    LisaControl.rotate(dx*.006,dy*.006);
+    lastMove={vx:dx*.006,vy:dy*.006,t:performance.now()};
+  }
+});
+function ptrEnd(e){
+  const p=ptrs.get(e.pointerId);
+  ptrs.delete(e.pointerId);
+  clearTimeout(pressT);
+  if(!p)return;
+  if(ctl.talking){setTalk(false)}
+  else if(!p.moved&&performance.now()-p.t0<350){
+    // double-tap dives into the sphere (or back out); a single tap fires neurons
+    const t=performance.now();
+    if(lastTap&&t-lastTap.t<320&&Math.hypot(p.x-lastTap.x,p.y-lastTap.y)<40){dive();lastTap=null}
+    else{tapAt(p.x,p.y);lastTap={t,x:p.x,y:p.y}}
+  }
+  else if(lastMove&&performance.now()-lastMove.t<80)LisaControl.fling(lastMove.vx*60,lastMove.vy*60);
+  if(!ptrs.size)LisaControl.hold(false);
+  pinchD=0;
+}
+cv.addEventListener("pointerup",ptrEnd);
+cv.addEventListener("pointercancel",ptrEnd);
+
+/* ---------------- dive inspector: what you see up close ---------------- */
+function drawInspector(){
+  if(mag<2)return;
+  const a=cl((mag-2)/1.5);
+  const fs=Math.max(10,Math.round(Math.min(W,H)*.014));
+  ctx.save();ctx.font=`${fs}px ${FONT}`;ctx.textBaseline="middle";ctx.textAlign="left";
+  // tag the closest neurons that are firing right now
+  const pick=[];
+  for(let i=0;i<N;i++)
+    if(SV[i]&&flash[i]>.3&&SX[i]>40&&SX[i]<W-220&&SY[i]>100&&SY[i]<H-130)pick.push(i);
+  pick.sort((p,q)=>SS[q]-SS[p]);
+  for(const i of pick.slice(0,9)){
+    const x=SX[i],y=SY[i],lx=x+26,ly=y-22;
+    ctx.strokeStyle=C(.6*a);ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(x+4,y-4);ctx.lineTo(lx,ly);ctx.lineTo(lx+fs*9,ly);ctx.stroke();
+    ctx.fillStyle=Cw(.6,.95*a);
+    ctx.fillText(`N-${String(i).padStart(4,"0")}`,lx+2,ly-fs*.75);
+    ctx.fillStyle=C(.85*a);
+    ctx.fillText(`FIRE ${flash[i]*100|0}%  ·  ${adj[i].length} LINKS`,lx+2,ly+fs*.75);
+  }
+  // the dive readout, top centre
+  ctx.textAlign="center";
+  const where=camD<1.02?"INSIDE THE CORTEX":camD<1.6?"AT THE SURFACE":"APPROACHING";
+  ctx.fillStyle=Cw(.5,.9*a);
+  ctx.fillText(`DIVE  ·  ${mag.toFixed(1)}x  ·  ${where}  ·  TIME ${slow*100|0}%  ·  ${pulses.length} SIGNALS IN FLIGHT`,W/2,30);
+  ctx.fillStyle=C(.55*a);
+  ctx.fillText("SCROLL / PINCH OUT, Z OR DOUBLE-TAP TO SURFACE",W/2,30+fs*1.6);
+  ctx.restore();
+}
+
+/* ---------------- hand hologram overlay ---------------- */
+const BONES=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const GESTURE_TXT={open:"LEAN",pinch:"GRAB",fist:"TALK",point:"TOUCH",zoom:"ZOOM",none:""};
+function drawHands(px,T){
+  const HS=window.LisaHands;
+  if(!HS||!HS.hands.length)return;
+  for(const h of HS.hands){
+    const p=h.pts, talkH=h.gesture==="fist";
+    fx.lineWidth=Math.max(1.2,px*2);
+    fx.strokeStyle=talkH?"rgba(90,255,170,.85)":Cw(.4,.7);
+    fx.beginPath();
+    for(const[a,b]of BONES){fx.moveTo(p[a][0],p[a][1]);fx.lineTo(p[b][0],p[b][1])}
+    fx.stroke();
+    for(let i=0;i<21;i++){
+      const tip=i%4===0&&i>0, g=(tip?10:6)*px;
+      fx.globalAlpha=tip?.95:.6;
+      fx.drawImage(tip?glowW:glowC,p[i][0]-g,p[i][1]-g,g*2,g*2);
+    }
+    fx.globalAlpha=1;
+    // gesture ring at the palm
+    const rr=(28+6*Math.sin(T*6))*px*1.4;
+    fx.strokeStyle=talkH?"rgba(90,255,170,.9)":Cw(.5,.8);
+    fx.beginPath();fx.arc(h.cx,h.cy,rr,T*2,T*2+4.4);fx.stroke();
+    const label=GESTURE_TXT[h.gesture]||"";
+    if(label){
+      fx.font=`${Math.max(10,Math.round(px*15))}px ${FONT}`;
+      fx.textAlign="center";fx.textBaseline="middle";
+      fx.fillStyle=talkH?"rgba(90,255,170,.95)":Cw(.6,.9);
+      fx.fillText(label,h.cx,h.cy+rr+14*px);
+    }
+  }
+}
+
+/* ---------------- side readouts ---------------- */
+const hist=new Float32Array(120);
+let histT=0,fireWin=0,fireRate=0,firedWin=0,hexT=0;
+const hex=[];
+const H2=()=>((rng()*256)|0).toString(16).toUpperCase().padStart(2,"0");
+function hexLine(){
+  let s="0x"+H2()+H2()+"  ";
+  for(let k=0;k<5;k++)s+=H2()+" ";
+  return s+(rng()<.2?" SYN":rng()<.2?" ACK":"");
+}
+for(let i=0;i<12;i++)hex.push(hexLine());
+function updateReadouts(s,md){
+  histT+=s;
+  while(histT>=.1){histT-=.1;hist.copyWithin(0,1);hist[119]=Math.min(1,pulses.length/220)}
+  fireWin+=s;
+  if(fireWin>=1){fireRate=firedWin/fireWin;firedWin=0;fireWin=0}
+  hexT+=s;
+  const every=md==="thinking"?.05:md==="speaking"?.12:md==="listening"?.2:.4;
+  while(hexT>=every){hexT-=every;hex.shift();hex.push(hexLine())}
+}
+function panel(x,y,w,h,title,a){
+  ctx.strokeStyle=C(.25*a);ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(x,y+10);ctx.lineTo(x,y);ctx.lineTo(x+w*.3,y);
+  ctx.moveTo(x+w,y+h-10);ctx.lineTo(x+w,y+h);ctx.lineTo(x+w*.7,y+h);
+  ctx.stroke();
+  ctx.fillStyle=C(.6*a);ctx.fillText(title,x+8,y+8);
+}
+function drawPanels(T,fs,a,slide,glowNow){
+  if(W<900||a<=0)return;
+  const pw=Math.min(250,W*.16), ph=H*.36, py=H*.28;
+  ctx.save();
+  ctx.font=`${fs}px ${FONT}`;ctx.textBaseline="top";ctx.textAlign="left";
+  spaced(".15em");
+  /* left: neural activity */
+  let x=44-slide;
+  panel(x,py,pw,ph,"NEURAL ACTIVITY",a);
+  const gx=x+8,gy=py+fs*2.4,gw=pw-16,gh=ph*.32;
+  ctx.beginPath();ctx.moveTo(gx,gy+gh);
+  for(let i=0;i<120;i++)ctx.lineTo(gx+gw*i/119,gy+gh-hist[i]*gh);
+  ctx.lineTo(gx+gw,gy+gh);ctx.closePath();
+  ctx.fillStyle=C(.12*a);ctx.fill();
+  ctx.beginPath();
+  for(let i=0;i<120;i++){const X=gx+gw*i/119,Y=gy+gh-hist[i]*gh;i?ctx.lineTo(X,Y):ctx.moveTo(X,Y)}
+  ctx.strokeStyle=C(.8*a);ctx.lineWidth=1.2;ctx.stroke();
+  const up=Math.floor(T),p2=n=>String(n).padStart(2,"0");
+  const rows=[["NEURONS",String(N)],["SYNAPSES",String(NE)],
+    ["FIRING",fireRate.toFixed(0)+" /s"],["CORE LOAD",Math.round(cl(glowNow/2.1)*100)+"%"],
+    ["UPTIME",`${p2(up/3600|0)}:${p2(up/60%60|0)}:${p2(up%60)}`]];
+  rows.forEach(([k,v],i)=>{
+    const yy=gy+gh+fs*1.2+i*fs*1.7;
+    ctx.fillStyle=C(.5*a);ctx.textAlign="left";ctx.fillText(k,gx,yy);
+    ctx.fillStyle=Cw(.5,.9*a);ctx.textAlign="right";ctx.fillText(v,gx+gw,yy);
+  });
+  /* right: data stream + voice meter */
+  x=W-44-pw+slide;
+  ctx.textAlign="left";
+  panel(x,py,pw,ph,"DATA STREAM",a);
+  ctx.font=`${Math.max(9,fs-1)}px ${FONT}`;
+  spaced("0px");
+  hex.forEach((line,i)=>{
+    ctx.fillStyle=i===hex.length-1?Cw(.6,.95*a):C((.18+.5*i/hex.length)*a);
+    ctx.fillText(line,x+8,py+fs*2.4+i*fs*1.25);
+  });
+  const by=py+ph-fs*3.2, bw=(pw-16)/16;
+  ctx.fillStyle=C(.5*a);ctx.fillText("VOICE",x+8,by-fs*1.4);
+  for(let i=0;i<16;i++){
+    const v=Math.max(.04,Lisa.energy*(.4+.6*band[i%3])*(.65+.35*Math.sin(T*7+i*.9))
+      +(Lisa.mode==="listening"?Lisa.mic*.3*Math.abs(Math.sin(T*6+i)):0));
+    const h=v*fs*2.4;
+    ctx.fillStyle=Cw(.3,(.35+.6*v)*a);
+    ctx.fillRect(x+8+i*bw,by+fs*2.4-h,bw*.7,h);
+  }
+  spaced("0px");
+  ctx.restore();
+}
+
+/* ---------------- HUD ---------------- */
+const MODE_TXT={idle:"STANDBY",listening:"LISTENING",thinking:"PROCESSING",speaking:"SPEAKING"};
+let lastMode="",modeTxt=null;
+function spaced(px){try{ctx.letterSpacing=px}catch(e){}}
+function hud(dt,T,a,glowNow,slide){
+  const fs=Math.max(10,Math.round(Math.min(W,H)*.016));
+  ctx.save();ctx.globalAlpha=a;
+  // corner brackets
+  ctx.strokeStyle=C(.35);ctx.lineWidth=1;
+  const m=18,L=30;
+  for(const[x,y,dx,dy]of[[m,m,1,1],[W-m,m,-1,1],[m,H-m,1,-1],[W-m,H-m,-1,-1]]){
+    ctx.beginPath();ctx.moveTo(x+dx*L,y);ctx.lineTo(x,y);ctx.lineTo(x,y+dy*L);ctx.stroke();
+  }
+  ctx.textBaseline="top";ctx.textAlign="left";
+  spaced(".35em");
+  ctx.font=`${Math.round(fs*1.6)}px ${FONT}`;
+  ctx.fillStyle=Cw(.55,.95);
+  ctx.fillText(Lisa.tag,44,40);
+  ctx.font=`${fs}px ${FONT}`;
+  ctx.fillStyle=C(.55);
+  ctx.fillText("NEURAL INTERFACE  ·  ONLINE",44,40+fs*2.1);
+  const HS=window.LisaHands;
+  if(HS&&HS.status){
+    const live=HS.status==="active";
+    ctx.fillStyle=live?Cw(.4,.85):"rgba(255,140,110,.75)";
+    ctx.fillText(`HAND LINK  ·  ${HS.status.toUpperCase()}`+(live&&HS.hands.length?`  ·  ${HS.hands.length} HAND${HS.hands.length>1?"S":""}`:""),44,40+fs*3.7);
+    // a short gesture guide once the camera comes up
+    if(live&&HS.since!=null&&T-HS.since<12){
+      const ga=cl(Math.min(T-HS.since,12-(T-HS.since))/1.2);
+      ctx.save();ctx.globalAlpha=a*ga;ctx.textAlign="center";spaced(".2em");
+      ctx.fillStyle=Cw(.4,.85);
+      ctx.fillText("OPEN HAND  LEAN   ·   PINCH  GRAB / TAP   ·   FIST  TALK   ·   POINT  TOUCH   ·   TWO PINCHES  ZOOM",W/2,H-128);
+      ctx.restore();ctx.textAlign="left";
+    }
+  }
+  // clock
+  const now=new Date();
+  const p2=n=>String(n).padStart(2,"0");
+  ctx.textAlign="right";
+  ctx.font=`${Math.round(fs*1.3)}px ${FONT}`;
+  ctx.fillStyle=Cw(.55,.9);
+  ctx.fillText(`${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`,W-44,40);
+  ctx.font=`${fs}px ${FONT}`;ctx.fillStyle=C(.55);
+  ctx.fillText(now.toDateString().toUpperCase(),W-44,40+fs*1.9);
+  // mode line (boot shows its own)
+  const md=boot<BOOT?"boot":Lisa.alert?"alert":Lisa.mode;
+  if(md!==lastMode){
+    lastMode=md;
+    modeTxt=fx_.decoder(md==="boot"?"INITIALIZING":md==="alert"?"ATTENTION":(MODE_TXT[md]||"STANDBY"),420);
+  }
+  const txt=modeTxt(dt);
+  ctx.textAlign="center";ctx.textBaseline="alphabetic";
+  ctx.font=`${Math.round(fs*1.2)}px ${FONT}`;
+  ctx.fillStyle=Cw(.4,.9);
+  const sy=H-74;
+  ctx.fillText(txt,W/2,sy);
+  const blink=.5+.5*Math.sin(T*5);
+  const tw=ctx.measureText(txt).width;
+  ctx.fillStyle=C(.4+.6*blink);
+  ctx.beginPath();ctx.arc(W/2-tw/2-fs,sy-fs*.4,fs*.28,0,6.2832);ctx.fill();
+  spaced("0px");
+  // credit
+  if(Lisa.credit){
+    spaced(".3em");
+    ctx.textAlign="right";ctx.font=`${fs}px ${FONT}`;
+    ctx.fillStyle=C(.6);
+    ctx.fillText(Lisa.credit.toUpperCase(),W-44,H-40);
+    spaced("0px");
+  }
+  // plan usage, stacked up from the bottom-left corner
+  ctx.textAlign="left";ctx.font=`${fs}px ${FONT}`;
+  Lisa.usage.slice().reverse().forEach((r,i)=>{
+    const y=H-40-i*(fs+6);
+    ctx.fillStyle=C(.5);ctx.fillText(r.label,44,y);
+    ctx.fillStyle=r.hot?"rgb(255,110,90)":Cw(.4,.9);ctx.fillText(r.text,44+fs*2.4,y);
+  });
+  ctx.restore();
+  drawPanels(T,fs,a*cl(outK*1.5),slide,glowNow);   // side panels step aside when you dive
+}
+
+/* ---------------- the frame ---------------- */
+const YAW={idle:.10,listening:.16,thinking:.42,speaking:.22};
+const MORPH={idle:.55,listening:.8,thinking:1.9,speaking:1.1};
+const AMP={idle:.06,listening:.07,thinking:.10,speaking:.07};
+const BOLTS={idle:.25,listening:.8,thinking:9,speaking:0};
+let T=0,boot=0,yaw=0,morphT=0,breathP=0,yawS=.1,morphS=.55,ampS=.06,glowS=1,holoT=0;
+let sc0=1,outK=1,mag=1,slow=1;         // camera: core scale, outside-fade, magnification, time scale
+{const c=+new URLSearchParams(location.search).get("cam");if(c>0){camD=camDT=c}}   // ?cam=0.6 starts dived in
+
+function frame(dt){
+  Lisa.step(dt);
+  const s=dt/1000;T+=s;boot+=s;
+  const md=PAL[Lisa.mode]?Lisa.mode:"idle";
+  const env=Lisa.energy, speaking=md==="speaking", thinking=md==="thinking";
+  const bootK=cl(boot/BOOT), hudA=easeOut((boot-.6)/1.4), slide=(1-hudA)*280;
+  easeCol(dt);refreshGlow();
+  const k=Math.min(1,s*2.5);
+  yawS+=(YAW[md]+(speaking?env*.3:0)-yawS)*k;
+  morphS+=(MORPH[md]-morphS)*k;ampS+=(AMP[md]-ampS)*k;
+  glowS+=((thinking?1.5:1)+env*.6-glowS)*k;
+  rateS+=(RATE[md]+(speaking?env*55:0)-rateS)*k;
+  mx+=(mxT-mx)*Math.min(1,s*3);my+=(myT-my)*Math.min(1,s*3);
+  yaw+=yawS*s*slow*(boot<BOOT?3-2*bootK:1);morphT+=morphS*s*slow;breathP+=s*6.2832/6;
+  // hand/touch spin keeps its momentum, then settles; tilt eases back to level
+  if(!ctl.held){
+    ctl.yawOff+=ctl.vYaw*s;ctl.pitchOff+=ctl.vPitch*s;
+    ctl.vYaw*=Math.exp(-s*1.4);ctl.vPitch*=Math.exp(-s*3);
+    ctl.pitchOff*=Math.exp(-s*.8);
+  }
+  // camera flight: eased in log space so diving in and pulling out feel equally smooth
+  camD=Math.exp(Math.log(camD)+(Math.log(camDT)-Math.log(camD))*Math.min(1,s*3.5));
+  sc0=CAM/camD; mag=sc0;
+  outK=cl((camD-1.6)/1.4);            // outside decorations fade once you're near the shell
+  slow=Math.max(.3,1/(1+(mag-1)*.2));  // time slows as you go deeper, so signals can be followed
+  const breath=.5+.5*Math.sin(breathP);
+  const pitch=.38+.18*Math.sin(T*.13)+my*.25+ctl.pitchOff;
+  const yawV=yaw+mx*.45+ctl.yawOff;
+  cyw=Math.cos(yawV);syw=Math.sin(yawV);cp=Math.cos(pitch);sp=Math.sin(pitch);
+  cx=W/2+mx*W*.012;cy=H*.46+my*H*.012;R=Math.min(W,H)*.22;
+  const px=R/300;
+  updateReadouts(s,md);
+  readBands();easeBands(s);
+
+  /* background */
+  ctx.drawImage(bg,0,0);
+  drawAurora(T);
+  drawStars(s);
+  drawFloor(s);
+  drawDust(s,T);
+
+  /* neurons (flying in from deep space during boot) */
+  const bk=bootK*1.6;
+  for(let i=0;i<N;i++){
+    const bx=base[i*3],by=base[i*3+1],bz=base[i*3+2];
+    let r=1+ampS*noise(bx,by,bz,morphT)+.012*breath;
+    // her voice ripples the surface as smooth travelling waves, never raw jitter
+    if(env>.005)r+=env*(.075*Math.sin(by*6-T*8)*(.6+.4*band[0])
+      +.05*Math.sin(bx*5+bz*4-T*11)*(.5+.5*band[1])
+      +.03*Math.sin(by*11+bx*7+T*15)*band[2]);
+    if(md==="listening")r-=.03*Lisa.mic;
+    r*=1+.04*env;
+    if(boot<BOOT*1.2)r*=1+scat[i]*(1-easeOut((bk-dly[i])/.8));
+    proj(bx*r,by*r,bz*r);
+    SX[i]=PX;SY[i]=PY;SD[i]=PD;SS[i]=PS*PF;SV[i]=PV&&PF>.02?1:0;
+  }
+
+  fx.clearRect(0,0,W,H);
+  fx.lineCap="round";
+
+  /* wiring, back to front in depth buckets (one stroke per bucket) */
+  const NB=4, wireA=easeOut((boot-1)/1.4);
+  fx.lineWidth=Math.max(.6,px*1.1);
+  for(let b=0;b<NB;b++){
+    fx.beginPath();
+    for(let e=0;e<NE;e++){
+      if(EA[e])continue;
+      const i=E0[e],j=E1[e];
+      if(!SV[i]||!SV[j])continue;
+      if(Math.min(NB-1,(SD[i]+SD[j])*.5*NB|0)!==b)continue;
+      fx.moveTo(SX[i],SY[i]);fx.lineTo(SX[j],SY[j]);
+    }
+    fx.strokeStyle=C((.05+.30*Math.pow(b/(NB-1),1.5))*glowS*wireA);
+    fx.stroke();
+  }
+  fx.beginPath();
+  for(let e=0;e<NE;e++){
+    if(!EA[e])continue;
+    const i=E0[e],j=E1[e];
+    if(!SV[i]||!SV[j])continue;
+    const qx=cx+((SX[i]+SX[j])/2-cx)*.3,qy=cy+((SY[i]+SY[j])/2-cy)*.3;
+    fx.moveTo(SX[i],SY[i]);fx.quadraticCurveTo(qx,qy,SX[j],SY[j]);
+  }
+  fx.strokeStyle=C(.07*glowS*wireA);fx.stroke();
+
+  /* neurons as dots */
+  for(let b=0;b<NB;b++){
+    fx.beginPath();
+    const rad0=(.7+b*.55)*px*1.4;
+    for(let i=0;i<N;i++){
+      if(!SV[i]||Math.min(NB-1,SD[i]*NB|0)!==b)continue;
+      const rad=rad0*Math.min(3.6,Math.max(.8,SS[i]));  // neurons grow as you fly toward them
+      fx.moveTo(SX[i]+rad,SY[i]);fx.arc(SX[i],SY[i],rad,0,6.2832);
+    }
+    fx.fillStyle=Cw(.35+.15*b,(.15+.28*b)*glowS*(.3+.7*bootK));
+    fx.fill();
+  }
+
+  /* core, ribbons, motes, pulses, rings: all additive light */
+  fx.globalCompositeOperation="lighter";
+  const ignite=easeOut((boot-.2)/1.2);
+  const cr=R*(.26+.09*env+.015*breath+(thinking?.025*Math.sin(T*7):0))*ignite;
+  if(cr>0){
+    // the core grows as you approach it, but dims so it never whites out the view
+    const crS=cr*Math.min(sc0,5), ka=1/(1+(sc0-1)*.12);
+    fx.globalAlpha=.55*ka;fx.drawImage(glowC,cx-crS*3,cy-crS*3,crS*6,crS*6);
+    fx.globalAlpha=.85*ka;fx.drawImage(glowW,cx-crS*.9,cy-crS*.9,crS*1.8,crS*1.8);
+    fx.globalAlpha=1;
+  }
+
+  const ribSpd=thinking?3:1+env*2;
+  fx.lineWidth=Math.max(1,px*1.4);
+  for(const rb of RIB){
+    const ang=T*rb.sp*ribSpd;
+    const rx=rb.rx+ang*.2,ry=rb.ry+ang;
+    const c1=Math.cos(rx),s1=Math.sin(rx),c2=Math.cos(ry),s2=Math.sin(ry);
+    const rr=rb.r*(1+.15*env)*ignite;
+    fx.beginPath();
+    for(let j=0;j<=48;j++){
+      const a=j/48*6.2832;
+      const x=Math.cos(a)*rr,y=Math.sin(a)*rr;
+      const y1=y*c1,z1=y*s1;
+      proj(x*c2+z1*s2,y1,-x*s2+z1*c2);
+      j&&PV?fx.lineTo(PX,PY):fx.moveTo(PX,PY);
+    }
+    fx.strokeStyle=Cw(.5,.35+.3*env);fx.stroke();
+  }
+
+  fx.beginPath();
+  const mspd=thinking?2.2:1+env;
+  for(const m of mote){
+    m.ph+=m.w*s*mspd;
+    const c=Math.cos(m.ph)*m.r*ignite,sn=Math.sin(m.ph)*m.r*ignite;
+    proj(m.ux*c+m.vx*sn,m.uy*c+m.vy*sn,m.uz*c+m.vz*sn);
+    if(!PV)continue;
+    const rad=(.8+PD*1.2)*px*1.3*Math.min(6,PS*PF);
+    fx.moveTo(PX+rad,PY);fx.arc(PX,PY,rad,0,6.2832);
+  }
+  fx.fillStyle=Cw(.7,.65*ignite);fx.fill();
+
+  /* lightning from the core to the shell */
+  if(boot>BOOT){
+    boltAcc+=(BOLTS[md]+(speaking?env*5:0))*s;
+    while(boltAcc>=1){
+      boltAcc--;
+      for(let tries=0;tries<8;tries++){
+        const i=rng()*N|0;
+        if(SV[i]&&SD[i]>.55){bolts.push({to:i,life:.16+rng()*.1,max:.26});break}
+      }
+    }
+  }
+  drawBolts(s,px);
+
+  /* synapses: spawn, travel, chain */
+  if(boot>1.2)spawnAcc+=rateS*s;
+  while(spawnAcc>=1){
+    spawnAcc--;
+    const e=rng()*NE|0;
+    spawnPulse(e,rng()<.5?E0[e]:E1[e],0);
+  }
+  const pspd=(thinking?1.5:1)*slow;    // slow motion the deeper you go
+  fx.beginPath();
+  for(let i=pulses.length-1;i>=0;i--){
+    const p=pulses[i];
+    p.p+=p.spd*s*pspd;
+    if(p.p>=1){
+      flash[p.to]=1;fired++;firedWin++;
+      if(p.gen<MAXGEN[md]&&rng()<CHAIN[md]){
+        const list=adj[p.to],e2=list[rng()*list.length|0];
+        if(e2!==p.e)spawnPulse(e2,p.to,p.gen+1);
+      }
+      pulses.splice(i,1);continue;
+    }
+    if(!SV[p.from]||!SV[p.to])continue;
+    const t0=Math.max(0,p.p-.4);
+    for(let j=0;j<=4;j++){
+      edgePt(p.e,p.from,p.to,t0+(p.p-t0)*j/4);
+      j?fx.lineTo(PX,PY):fx.moveTo(PX,PY);
+    }
+  }
+  fx.strokeStyle=Cw(.6,.75);fx.lineWidth=Math.max(1,px*1.7*Math.min(3,Math.sqrt(sc0)));fx.stroke();
+  for(const p of pulses){
+    if(!SV[p.from]||!SV[p.to])continue;
+    edgePt(p.e,p.from,p.to,p.p);
+    const a=.35+.65*PD, k=Math.min(3.5,(SS[p.from]+SS[p.to])/2);
+    fx.globalAlpha=a*.8;
+    const g=22*px*k;fx.drawImage(glowC,PX-g,PY-g,g*2,g*2);
+    fx.globalAlpha=a;
+    const w=7*px*k;fx.drawImage(glowW,PX-w,PY-w,w*2,w*2);
+  }
+  for(let i=0;i<N;i++){
+    if(flash[i]<.03){flash[i]=0;continue}
+    if(!SV[i]){flash[i]-=s*2.2*slow;continue}
+    const f=flash[i],g=(8+22*f)*px*Math.min(3.5,SS[i]);
+    fx.globalAlpha=f*(.4+.6*SD[i]);
+    fx.drawImage(glowW,SX[i]-g/2,SY[i]-g/2,g,g);
+    fx.drawImage(glowC,SX[i]-g,SY[i]-g,g*2,g*2);
+    flash[i]-=s*2.2*slow;
+  }
+  fx.globalAlpha=1;
+
+  /* orbit rings + satellites (they draw themselves in during boot) */
+  const ringDraw=easeOut((boot-1.3)/1.1), ringA=ringDraw*cl((camD-2.4)/1.6);  // rings fade as you dive
+  for(const g of RINGS){
+    if(ringA<=.01)break;
+    const rr=g.r*(1+.05*env), rot=T*g.spd, span=140*ringDraw|0;
+    if(g.dash)fx.setLineDash([4*px,9*px]);
+    const front=new Path2D(),back=new Path2D();
+    let lx=0,ly=0,lv=false;
+    for(let j=0;j<=span;j++){
+      ringPt(g,j/140*6.2832,rr,rot);
+      if(j&&PV&&lv){const path=PD>.5?front:back;path.moveTo(lx,ly);path.lineTo(PX,PY)}
+      lx=PX;ly=PY;lv=PV;
+    }
+    fx.lineWidth=Math.max(1,px*1.2);
+    fx.strokeStyle=C(.10*glowS*ringA);fx.stroke(back);
+    fx.strokeStyle=C(.38*glowS*ringA);fx.stroke(front);
+    fx.setLineDash([]);
+    for(let si=0;si<g.sats;si++){
+      ringPt(g,T*g.spd*2.2+si*Math.PI,rr,rot);
+      if(!PV)continue;
+      fx.globalAlpha=(.35+.65*PD)*ringA;
+      const a=16*px*(.7+.5*PD);fx.drawImage(glowC,PX-a,PY-a,a*2,a*2);
+      const b2=5*px;fx.drawImage(glowW,PX-b2,PY-b2,b2*2,b2*2);
+      fx.globalAlpha=1;
+    }
+  }
+
+  drawHoloRings(T,px,hudA*outK);
+  drawVoiceHalo(px,env,T);
+
+  /* voice shockwaves (speaking) and inward pulls (listening): eased, double-stroked */
+  waveCool-=s;listenCool-=s;
+  if(speaking&&env-envPrev>.035&&env>.25&&waveCool<=0){
+    waves.push({r:1.08,a:.2+.5*env,v:1.3});waveCool=.14;
+  }
+  if(md==="listening"&&listenCool<=0){waves.push({r:2.0,a:.35,v:-.7});listenCool=.9}
+  envPrev=env;
+  for(let i=waves.length-1;i>=0;i--){
+    const w=waves[i];
+    w.r+=w.v*s;
+    if(w.v>0)w.v*=Math.exp(-s*1.1);            // outward rings decelerate like a real ripple
+    w.a-=s*(w.v>0?.45:.3);
+    if(w.a<=0||w.r<1.02||w.r>2.6){waves.splice(i,1);continue}
+    const rr=w.r*R*sc0;
+    fx.strokeStyle=C(w.a*.3*outK);fx.lineWidth=Math.max(2,px*7);
+    fx.beginPath();fx.arc(cx,cy,rr,0,6.2832);fx.stroke();
+    fx.strokeStyle=Cw(.4,w.a*outK);fx.lineWidth=Math.max(1,px*1.6);
+    fx.beginPath();fx.arc(cx,cy,rr,0,6.2832);fx.stroke();
+  }
+  for(let i=ripples.length-1;i>=0;i--){
+    const rp=ripples[i];
+    rp.r+=s*R*1.6;rp.a-=s*1.1;
+    if(rp.a<=0){ripples.splice(i,1);continue}
+    fx.strokeStyle=Cw(.5,rp.a);fx.lineWidth=Math.max(1,px*2);
+    fx.beginPath();fx.arc(rp.x,rp.y,rp.r,0,6.2832);fx.stroke();
+    fx.strokeStyle=C(rp.a*.5);
+    fx.beginPath();fx.arc(rp.x,rp.y,rp.r*.6,0,6.2832);fx.stroke();
+  }
+
+  /* thinking scanner arcs */
+  scanA+=s*2.6;
+  if(thinking&&outK>.05){
+    const rad=R*1.15*sc0;
+    for(let h=0;h<2;h++){
+      for(let j=0;j<24;j++){
+        const t=j/23,a=scanA+h*Math.PI-1.2*(1-t);
+        fx.fillStyle=Cw(.4,t*t*.8*outK);
+        fx.beginPath();fx.arc(cx+Math.cos(a)*rad,cy+Math.sin(a)*rad,(1+t*2.5)*px*1.5,0,6.2832);fx.fill();
+      }
+    }
+  }
+  drawVoiceLine(px,env,T);
+  drawHands(px,T);
+  fx.globalCompositeOperation="source-over";
+
+  fx_.bloom(ctx,field,W,H);
+  drawInspector();
+
+  /* boot scan line */
+  if(boot<BOOT){
+    const y=H*bootK;
+    const g=ctx.createLinearGradient(0,y-60,0,y+4);
+    g.addColorStop(0,C(0));g.addColorStop(1,Cw(.5,.35*(1-bootK)+.1));
+    ctx.fillStyle=g;ctx.fillRect(0,y-60,W,64);
+    ctx.fillStyle=Cw(.7,.8);ctx.fillRect(0,y,W,1.5);
+  }
+
+  if(Lisa.alert){
+    ctx.fillStyle=`rgba(255,40,40,${.06+.05*Math.sin(T*5)})`;ctx.fillRect(0,0,W,H);
+  }
+  hud(dt,T,hudA,glowS,slide);
+
+  /* hologram finish: scanlines, vignette, a slow refresh band */
+  ctx.drawImage(scan,0,0);
+  holoT=(holoT+s/7)%1;
+  const by=holoT*(H+200)-100;
+  const sweep=ctx.createLinearGradient(0,by-100,0,by+100);
+  sweep.addColorStop(0,C(0));sweep.addColorStop(.5,C(.035));sweep.addColorStop(1,C(0));
+  ctx.fillStyle=sweep;ctx.fillRect(0,by-100,W,200);
+}
+
+function resize(){
+  W=cv.width=innerWidth;H=cv.height=innerHeight;
+  field.width=W;field.height=H;
+  cx=W/2;cy=H*.46;
+  buildBg();
+}
+refreshGlow();
+addEventListener("resize",resize);
+resize();
+Lisa.run(frame);
+</script>
+<script type="module" src="hands.js"></script>
+</body>
+</html>

@@ -66,7 +66,9 @@ class Mind:
                 elif kind == "content_block_stop":
                     on_text(None)
             elif isinstance(msg, ResultMessage):
-                if msg.is_error and msg.subtype != "error_during_execution":
+                # Any failure is raised; the caller stays quiet about it
+                # when the turn was one Sharat interrupted on purpose.
+                if msg.is_error:
                     detail = "; ".join(msg.errors or []) or msg.result or msg.subtype
                     raise RuntimeError(f"brain error: {detail}")
 

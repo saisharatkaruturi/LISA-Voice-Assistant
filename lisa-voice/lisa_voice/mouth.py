@@ -164,7 +164,12 @@ class Mouth:
                 self._out.write(block.reshape(-1, 1))
         except Exception as e:
             log(f"[mouth] speaker error: {e}")
-            self._out = None
+            if self._out is not None:
+                try:
+                    self._out.close()
+                except Exception:
+                    pass
+            self._out = None             # reopened on the next sentence
 
     def _idle_output(self) -> None:
         # Release the speaker between replies.

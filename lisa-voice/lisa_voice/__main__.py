@@ -16,7 +16,7 @@ import threading
 import time
 
 from lisa_voice import settings
-from lisa_voice.ears import Ears
+from lisa_voice.ears import PREROLL_BLOCKS, BLOCK, RATE, Ears
 from lisa_voice.face import Face
 from lisa_voice.log import log
 from lisa_voice.mind import Mind
@@ -31,6 +31,11 @@ def time_of_day() -> str:
 
 def _plain(text: str) -> str:
     return " ".join(re.findall(r"[a-z']+", text.lower()))
+
+
+# After an interrupt the speakers keep playing for a moment (the audio
+# device's own buffer); that tail is dropped so she doesn't hear herself.
+SPEAKER_TAIL = 0.25
 
 
 class Voice:
@@ -130,6 +135,8 @@ class Voice:
         if self.press is press and not press["confirmed"]:
             press["confirmed"] = True
             await self._stop_talking()
+            # Everything recorded so far is LISA's own voice off the speakers.
+            self.ears.restart(SPEAKER_TAIL)
             self.face.state("listening")
 
     async def _key_up(self, at: float) -> bool:
@@ -143,7 +150,11 @@ class Voice:
                 self.face.state("idle")
             return False
         if not press["confirmed"]:
+            # Released before the interrupt timer ran: she was talking for
+            # the whole pre-roll and the first tap_seconds, so drop that.
             await self._stop_talking()
+            drop = PREROLL_BLOCKS * BLOCK + int((self.tap + SPEAKER_TAIL) * RATE)
+            audio = audio[drop:]
         self.face.state("thinking")
         text = await asyncio.to_thread(self.ears.transcribe, audio)
         if not text:
@@ -191,12 +202,30 @@ class Voice:
             for sentence in (cut.flush() if chunk is None else cut.feed(chunk)):
                 self._say(sentence)
 
+        # Tell the face what she's really doing: "speaking" while her audio
+        # is queued or playing, "thinking" when she goes quiet but is still
+        # working (a tool call mid-reply). Without this the face guessed
+        # from the waveform and re-chimed at every pause.
+        asking = True
+
+        async def show_state():
+            shown = "thinking"
+            while tid == self.turn_id:
+                busy = self.mouth.busy
+                want = "speaking" if busy else "thinking" if asking else None
+                if want and want != shown and self.press is None:
+                    shown = want
+                    self.face.state(want)
+                await asyncio.sleep(0.05)
+
+        watcher = asyncio.create_task(show_state())
         try:
             await self.mind.ask(text, on_text)
             on_text(None)
             if tid == self.turn_id:
                 self.face.clear_alert()
         except asyncio.CancelledError:
+            watcher.cancel()
             raise
         except Exception as e:
             log(f"[mind] {e}")
@@ -207,8 +236,10 @@ class Voice:
                     await self.mind.reconnect()
                 except Exception as e2:
                     log(f"[mind] reconnect failed: {e2}")
+        asking = False
         while tid == self.turn_id and self.mouth.busy:
             await asyncio.sleep(0.05)
+        watcher.cancel()
         if tid == self.turn_id and self.press is None:
             self.face.state("idle")
 

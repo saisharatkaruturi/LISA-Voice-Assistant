@@ -42,7 +42,12 @@ def load() -> dict:
     cfg = dict(DEFAULTS)
     path = HOME / "voice.json"
     if path.exists():
-        cfg.update(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            cfg.update(json.loads(path.read_text(encoding="utf-8")))
+        except (ValueError, OSError) as e:
+            # A typo in the overrides must not keep her from starting.
+            from lisa_voice.log import log
+            log(f"[settings] voice.json ignored, using defaults: {e}")
     model = Path(cfg["hearing_model"])
     if not model.is_absolute():
         cfg["hearing_model"] = str(HOME / model)

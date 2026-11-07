@@ -17,7 +17,9 @@ import numpy as np
 from lisa_voice.settings import HOME
 
 WAVE_POINTS = 64
-WAVE_INTERVAL = 1 / 15
+# Audio arrives in 1/15 s blocks; throttling at exactly 1/15 s dropped every
+# other packet to timing jitter, so allow slightly faster.
+WAVE_INTERVAL = 0.05
 
 
 class Face:

@@ -35,6 +35,7 @@ class Ears:
         self._lock = threading.Lock()
         self._recording = False
         self._frames = []
+        self._skip = 0                   # samples still to discard
         self._preroll = collections.deque(maxlen=PREROLL_BLOCKS)
 
     # ---- the model ----
@@ -96,10 +97,12 @@ class Ears:
     def _on_audio(self, block, _frames, _time, _status) -> None:
         chunk = block[:, 0].copy()
         with self._lock:
-            if self._recording:
-                self._frames.append(chunk)
-            else:
+            if not self._recording:
                 self._preroll.append(chunk)
+            elif self._skip > 0:
+                self._skip -= len(chunk)
+            else:
+                self._frames.append(chunk)
 
     def open_mic(self) -> None:
         if self._stream is not None and self._stream.active:
@@ -121,7 +124,17 @@ class Ears:
             log(f"[ears] microphone unavailable: {e}")
         with self._lock:
             self._frames = list(self._preroll)
+            self._skip = 0
             self._recording = True
+
+    def restart(self, skip_seconds: float = 0.0) -> None:
+        """Throw away everything recorded so far, plus the next
+        skip_seconds. Used when Sharat interrupts her: until then the mic
+        was hearing LISA's own voice from the speakers, and the speakers
+        keep playing a fraction of a second after she's told to stop."""
+        with self._lock:
+            self._frames = []
+            self._skip = int(skip_seconds * RATE)
 
     def stop(self) -> np.ndarray:
         with self._lock:

@@ -193,10 +193,17 @@ class Mixer:
 # down for you. The face re-sends "hold" every few hundred ms while the fist
 # stays closed; if those stop (tab closed, camera lost) the watchdog lets the
 # key go, so it can never stick down and leave her recording forever.
+# The same key names lisa-voice accepts (lisa_voice/talk_key.py).
 VK = {"home": 0x24, "end": 0x23, "insert": 0x2D, "pause": 0x13,
-      "f13": 0x7C, "f14": 0x7D, "f15": 0x7E, "scroll_lock": 0x91}
-TALK_VK = VK.get(str(SETTINGS.get("talk_key", "home")).lower(), 0x24)
-EXTENDED = {0x24, 0x23, 0x2D}          # nav-cluster keys need the extended flag
+      "scroll_lock": 0x91, "page_up": 0x21, "page_down": 0x22,
+      "right_ctrl": 0xA3, "right_alt": 0xA5, "right_shift": 0xA1,
+      **{f"f{n}": 0x6F + n for n in range(1, 21)}}
+_KEY = str(SETTINGS.get("talk_key", "home")).lower()
+if _KEY not in VK:
+    print(f"talk_key '{_KEY}' is not one I can press; using home", flush=True)
+TALK_VK = VK.get(_KEY, 0x24)
+# nav-cluster keys and the right-hand modifiers need the extended flag
+EXTENDED = {0x24, 0x23, 0x2D, 0x21, 0x22, 0xA3, 0xA5}
 talk = {"held": False, "beat": 0.0, "lock": threading.Lock()}
 
 
@@ -258,7 +265,11 @@ def sound_director():
         if mode == "listening" and not quiet:
             mixer.play("listen", gain=0.55)
         if mode == "thinking" and not quiet:
-            mixer.play("ack", gain=0.6)
+            # The "got it" chime is for a new command only; a pause in the
+            # middle of a reply (speaking -> thinking) just brings the
+            # thinking loop back.
+            if prev in ("idle", "listening"):
+                mixer.play("ack", gain=0.6)
             mixer.play("think", gain=0.38, loop=True, fade_in=1.4)
         prev = mode
 

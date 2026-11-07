@@ -4,9 +4,9 @@ rem Starts the face server (standard-library Python) and opens the face.
 title LISA face
 cd /d "%~dp0"
 
-rem The voice line's own Python always exists on this machine; fall back to
+rem LISA's voice engine Python always exists on this machine; fall back to
 rem the Windows launcher only if it ever goes missing.
-set "VENV_PY=%~dp0..\backtalk\.venv\Scripts\python.exe"
+set "VENV_PY=%~dp0..\lisa-voice\.venv\Scripts\python.exe"
 if exist "%VENV_PY%" (
   "%VENV_PY%" server.py %*
 ) else (

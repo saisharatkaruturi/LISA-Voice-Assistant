@@ -20,7 +20,7 @@ She runs my student life: planning my day, reading my timetable, prepping for ex
 |---|---|---|
 | Brain + identity | LISA's personality, rules, and operating manual | `CLAUDE.md` |
 | Memory | Obsidian vault: profile, studies, daily notes, Jobs | `D:/Coding Projects/LISA Memory` |
-| Voice | Push-to-talk → local speech recognition → Claude → spoken reply | `backtalk/` |
+| Voice | My own voice engine: push-to-talk → local speech recognition → Claude → spoken reply | `lisa-voice/` |
 | Face | LISA Core: my own server and engine, streaming her live state to the browser | `lisa-face/` |
 | Launch | One click, starts automatically at login | `Talk to LISA.bat` |
 
@@ -32,6 +32,6 @@ Double-click **Talk to LISA** on the Desktop (it also starts by itself at login)
 
 LISA — her design, identity, memory system, study workflows, the LISA Core face and her sound — is my project.
 
-She runs on Claude, and her voice line uses an open-source component under its own license (see `backtalk/LICENSE`).
+She runs on Claude. Her voice engine is my own code, built on open-source libraries used under their own licenses: faster-whisper (hearing), Kokoro (speech), sounddevice and pynput (audio and the talk key), and Claude's agent SDK (the brain link).
 
 © 2026 Sharat

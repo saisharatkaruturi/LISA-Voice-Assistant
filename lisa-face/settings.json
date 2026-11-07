@@ -2,7 +2,7 @@
   "name": "LISA",
   "credit": "Built by Sharat",
   "port": 7420,
-  "bus": "../backtalk",
+  "bus": "../lisa-voice",
   "sound": true,
   "gestures": true,
   "talk_key": "home"

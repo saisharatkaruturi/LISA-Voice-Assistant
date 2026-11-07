@@ -1,0 +1,5 @@
+.venv/
+models/
+logs/
+__pycache__/
+.voice_*

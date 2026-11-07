@@ -10,7 +10,7 @@ Copyright (C) 2026 Sharat. All rights reserved.
 
 Everything shares one synthetic hall reverb so the set sounds like it
 lives in the same room. Run with the voice line's Python:
-  backtalk\\.venv\\Scripts\\python.exe tools\\make_sounds.py
+  lisa-voice\\.venv\\Scripts\\python.exe tools\\make_sounds.py
 Writes into ../sounds/.
 """
 import wave

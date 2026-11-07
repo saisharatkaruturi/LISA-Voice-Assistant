@@ -1,0 +1,18 @@
+[project]
+name = "lisa-voice"
+version = "1.0.0"
+description = "LISA's voice engine: push-to-talk, local hearing, a live Claude Code brain, and a spoken reply."
+authors = [{ name = "Sharat" }]
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "claude-agent-sdk==0.2.168",
+    "faster-whisper==1.2.1",
+    "kokoro==0.9.4",
+    "numpy==2.5.4",
+    "pynput==1.8.2",
+    "sounddevice==0.5.6",
+]
+# Exact versions of everything installed (with dependencies): requirements.txt
+
+[tool.uv]
+package = false

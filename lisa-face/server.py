@@ -44,7 +44,7 @@ TICK = 1 / 15            # seconds between status pushes
 WAVE_FRESH = 0.6         # a waveform older than this means she stopped talking
 
 DEFAULT_SETTINGS = {"name": "LISA", "credit": "Built by Sharat",
-                    "port": 7420, "bus": "../backtalk", "sound": True,
+                    "port": 7420, "bus": "../lisa-voice", "sound": True,
                     "gestures": True, "talk_key": "home"}
 
 

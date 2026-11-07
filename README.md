@@ -32,6 +32,6 @@ Double-click **Talk to LISA** on the Desktop (it also starts by itself at login)
 
 LISA — her design, identity, memory system, study workflows, the LISA Core face and her sound — is my project.
 
-She runs on Claude. Her voice engine is my own code, built on open-source libraries used under their own licenses: faster-whisper (hearing), Kokoro (speech), sounddevice and pynput (audio and the talk key), and Claude's agent SDK (the brain link).
+She runs on Claude. Her voice engine is my own code, built on open-source libraries used under their own licenses: faster-whisper (hearing), Kokoro (speech), sounddevice and pynput (audio and the talk key), and Claude's agent SDK (the brain link). Her face's hand tracking uses Google's MediaPipe Tasks Vision library and its hand landmarker model (`lisa-face/web/models/hand_landmarker.task`), both under the Apache License 2.0.
 
 © 2026 Sharat

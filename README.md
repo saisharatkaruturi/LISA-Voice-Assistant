@@ -226,41 +226,37 @@ The response streams back to the voice engine. Kokoro generates speech sentence 
 
 ## 🖥️ Product Showcase
 
-LISA's interface is designed to provide a visual representation of the assistant's current activity.
+LISA's interface shows exactly what she's doing at every moment. These are real captures of the running system.
 
-Add your actual project screenshots to the repository and reference them below.
+### 01 — Listening
 
-### 01 — LISA Main Interface
+*The talk key, a touch, or a fist is held down, and LISA is capturing the user's voice.*
 
-*The custom animated neural-sphere interface.*
+![LISA Listening](./screenshots%20lisa/listening.png)
 
-![LISA Main Interface](./assets/screenshots/lisa-main.png)
+### 02 — Processing
 
-### 02 — Listening State
+*Speech has been transcribed, and LISA is reasoning through the request.*
 
-*LISA actively listening to the user's voice.*
+![LISA Processing](./screenshots%20lisa/processing.png)
 
-![LISA Listening](./assets/screenshots/lisa-listening.png)
+### 03 — Speaking
 
-### 03 — Thinking State
+*The first sentence of the reply is rendered and LISA starts to speak.*
 
-*LISA processing a request through her reasoning layer.*
+![LISA Speaking](./screenshots%20lisa/speaking.png)
 
-![LISA Thinking](./assets/screenshots/lisa-thinking.png)
+### 04 — Answering
 
-### 04 — Speaking State
+*Mid-reply. The core flares, and the waveform and voice bars track her speech live.*
 
-*LISA generating and delivering a spoken response.*
+![LISA Answering](./screenshots%20lisa/answering.png)
 
-![LISA Speaking](./assets/screenshots/lisa-speaking.png)
+### 05 — Hand Gesture Tracking
 
-### 05 — Gesture Interaction
+*Webcam hand tracking with both hands detected, drawn as skeletons over the interface. A fist works as push-to-talk.*
 
-*Webcam-based hand tracking and gesture interaction.*
-
-![LISA Gesture Interaction](./assets/screenshots/lisa-gesture.png)
-
-> **Important:** Replace these example image paths with your actual screenshots before publishing. GitHub will show broken images until the corresponding files exist. You can also remove any screenshot section for which you do not yet have an image.
+![LISA Hand Gestures](./screenshots%20lisa/hand%20gestures.png)
 
 ---
 

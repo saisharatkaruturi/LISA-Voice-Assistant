@@ -260,7 +260,7 @@ Add your actual project screenshots to the repository and reference them below.
 
 ![LISA Gesture Interaction](./assets/screenshots/lisa-gesture.png)
 
-> Replace these example image paths with your actual screenshots before publishing. GitHub will show broken images until the corresponding files exist.
+> **Important:** Replace these example image paths with your actual screenshots before publishing. GitHub will show broken images until the corresponding files exist. You can also remove any screenshot section for which you do not yet have an image.
 
 ---
 
@@ -462,7 +462,7 @@ uv venv --python 3.12 .venv
 
 ### 5. Install Dependencies
 
-```bash
+```powershell
 uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 ```
 
